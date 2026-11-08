@@ -25,6 +25,28 @@ Press **Queue** at the bottom left of the recipe details.
 Tasks count down whenever the recipe's craft succeeds, including from the window's own Create
 button. Each character has its own list per profession. A task's count is crafts, not items.
 
+## Materials you can make
+
+Adding a recipe also queues the materials it needs that this character can make, when there aren't
+enough in its bags, bank, mail and alts. Add Copper Blade without the bars and Smelt Copper goes on
+the list too, above the blade, with as many as the bars needed. A chat line says what was added.
+
+- A material from another profession goes on that profession's list: the bars for Blacksmithing
+  on the Mining list. It shows with a guessed amount per craft until you next open that profession.
+- What other lists will make counts toward this one, so the Blacksmithing materials don't show
+  those bars as missing.
+- If more than one of your recipes makes the material, nothing is queued for it and chat says so.
+- It counts what the whole list needs, so it also tops up what earlier tasks were short of.
+- It can be turned off under pfUI's settings, in Thirdparty > Tradeskill.
+
+## Buying from vendors
+
+At a merchant that sells something your tasks need (flux, vials, thread), a **Buy task materials**
+button appears under the merchant window. Hover it for the list and the cost; click to buy. It
+buys only what's short after your bags, bank, mail and alts, across all your professions, and no
+more than your money covers. Chat lists what was bought. A setting buys it as soon as you open the
+merchant instead; it's off unless you turn it on.
+
 ## Missing recipes
 
 Press **Missing**, next to **Queue**, for the recipes of the open profession you haven't learned.
@@ -63,7 +85,7 @@ task doesn't show those bars as missing.
 
 Your own bags and bank are always live. Mail and alts come from Altoholic, covering your other
 characters on the realm, of either faction, since this server lets the factions mail each other, and are as recent as each character's last login. Both can be
-turned off under pfUI's settings, in Thirdparty > Trades.
+turned off under pfUI's settings, in Thirdparty > Tradeskill.
 
 ## Bank reminder
 

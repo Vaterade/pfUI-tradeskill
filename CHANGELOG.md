@@ -6,6 +6,19 @@ the version in `pfUI-tradeskill.toc` into the GitHub release notes, so write it 
 Versions follow [semantic versioning](https://semver.org/): a fix raises the last number, a
 new feature the middle one. While the first number is 0 the addon isn't considered stable yet.
 
+## [0.3.0] - unreleased
+
+### Added
+- Adding a recipe also queues the materials it needs that you can make and don't have enough
+  of, counting your bags, bank, mail and alts: Copper Blade brings Smelt Copper with it. A
+  material from another profession goes on that profession's list.
+- A **Buy task materials** button on merchants that sell what your tasks need, buying only
+  what's short. A setting buys it automatically when the merchant opens; it's off by default.
+
+### Changed
+- What one profession's list will make counts toward the others, so bars queued on the Mining
+  list aren't shown as missing for Blacksmithing.
+
 ## [0.2.1] - 2026-11-07
 
 ### Changed
@@ -47,6 +60,7 @@ The first release.
 - A bank reminder listing materials to take out for your tasks.
 - An alt reminder at the bank and mailbox listing materials to send to your other characters.
 
+[0.3.0]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.1.0

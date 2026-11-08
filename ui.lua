@@ -28,6 +28,8 @@ pfUI:RegisterModule("trades", function()
   pfUI:UpdateConfig("trades", nil, "mail", "1")
   pfUI:UpdateConfig("trades", nil, "bankreminder", "1")
   pfUI:UpdateConfig("trades", nil, "altreminder", "1")
+  pfUI:UpdateConfig("trades", nil, "intermediates", "1")
+  pfUI:UpdateConfig("trades", nil, "autobuy", "0")
 
   local function Font(parent, justify)
     local text = parent:CreateFontString(nil, "OVERLAY")
@@ -260,9 +262,65 @@ pfUI:RegisterModule("trades", function()
     end
   end
 
+  -- [ Merchant ]
+  -- A button under the merchant window while it sells something the task lists are short of.
+
+  local buy, buyRows
+
+  local function BuyTooltip()
+    if not buyRows then return end
+    GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
+    GameTooltip:SetText(T["Buy task materials"])
+    local total = 0
+    for _, row in ipairs(buyRows) do
+      if row.buys > 0 then
+        GameTooltip:AddDoubleLine(row.count .. " x " .. row.name, M.Money(row.cost), 1, 1, 1, 1, 1, 1)
+        total = total + row.cost
+      end
+      if row.poor then
+        GameTooltip:AddLine(string.format(T["Not enough money for all the %s"], row.name), 1, .3, .3)
+      end
+    end
+    GameTooltip:AddDoubleLine(T["Total"], M.Money(total), .7, .7, .7, 1, 1, 1)
+    GameTooltip:Show()
+  end
+
+  local function RefreshBuy()
+    if not MerchantFrame then return end
+    local open = MerchantFrame:IsVisible() and MerchantFrame.selectedTab ~= 2 -- not the buyback tab
+    buyRows = open and M.VendorPurchases() or nil
+    local any
+    for _, row in ipairs(buyRows or {}) do
+      if row.buys > 0 then any = true end
+    end
+    if not any then
+      if buy then buy:Hide() end
+      return
+    end
+
+    if not buy then
+      buy = Button(MerchantFrame, T["Buy task materials"], 140, 22, function()
+        M.BuyVendorMaterials()
+        GameTooltip:Hide()
+      end)
+      buy:SetScript("OnEnter", BuyTooltip)
+      buy:SetScript("OnLeave", function() GameTooltip:Hide() end)
+      -- under the window's bottom right, clear of its tabs on the left; without pfUI's skin the
+      -- frame reaches past its art, as far as pfUI's skin insets it
+      if MerchantFrame.backdrop then
+        buy:SetPoint("TOPRIGHT", MerchantFrame.backdrop, "BOTTOMRIGHT", 0, -4)
+      else
+        buy:SetPoint("TOPRIGHT", MerchantFrame, "BOTTOMRIGHT", -32, 54)
+      end
+    end
+    buy:Show()
+  end
+  M.RefreshBuy = RefreshBuy
+
   M.onChange = function()
     CountOnToggle()
     Refresh()
+    RefreshBuy()
   end
 
   -- [ Rows ]
@@ -819,6 +877,10 @@ pfUI:RegisterModule("trades", function()
     if toggles[name] and _G[M.windows[name].frame]:IsShown() then WindowShown(name) end
   end)
 
+  -- the merchant events can come before the window shows; tabs and pages redraw it
+  if MerchantFrame then HookScript(MerchantFrame, "OnShow", RefreshBuy) end
+  if hooksecurefunc and MerchantFrame_Update then hooksecurefunc("MerchantFrame_Update", RefreshBuy) end
+
   -- [ Settings ]
 
   local function Settings()
@@ -832,6 +894,8 @@ pfUI:RegisterModule("trades", function()
       pfUI.gui.CreateConfig(M.onChange, T["Count materials in the mail"], C.trades, "mail", "checkbox")
       pfUI.gui.CreateConfig(M.onChange, T["Remind me at the bank to take materials"], C.trades, "bankreminder", "checkbox")
       pfUI.gui.CreateConfig(M.onChange, T["Remind me at the bank and mailbox about materials for alts"], C.trades, "altreminder", "checkbox")
+      pfUI.gui.CreateConfig(M.onChange, T["Queue the materials you can make when adding a recipe"], C.trades, "intermediates", "checkbox")
+      pfUI.gui.CreateConfig(M.onChange, T["Buy task materials from vendors automatically"], C.trades, "autobuy", "checkbox")
     end)
   end
 

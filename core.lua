@@ -82,6 +82,12 @@ function M.Option(key)
   return not config or config[key] ~= "0"
 end
 
+-- for settings that are off unless turned on
+function M.OptionSet(key)
+  local config = pfUI_config and pfUI_config.trades
+  return config and config[key] == "1" or false
+end
+
 -- [ The two profession windows ]
 
 -- The subclass and slot dropdowns and collapsed headers change which rows exist, and so every
@@ -107,6 +113,7 @@ function TradeSkill.Count() return GetNumTradeSkills() end
 function TradeSkill.Selected() return GetTradeSkillSelectionIndex() end
 function TradeSkill.Info(i) return GetTradeSkillInfo(i) end
 function TradeSkill.Cast(i, count) DoTradeSkill(i, count) end
+function TradeSkill.Item(i) return GetTradeSkillItemID(i) end
 
 function TradeSkill.Select(i)
   TradeSkillFrame_SetSelection(i)
@@ -296,18 +303,23 @@ function M.AddSelected(ctx, count)
   end
 
   local tasks = M.Tasks(profession)
+  local added
   for _, existing in ipairs(tasks) do
     if existing.name == task.name then
       existing.count = existing.count + count
-      Changed()
-      return existing
+      added = existing
+      break
     end
   end
+  if not added then
+    task.count = count
+    table.insert(tasks, task)
+    added = task
+  end
 
-  task.count = count
-  table.insert(tasks, task)
+  if M.Option("intermediates") then M.AddIntermediates(ctx, profession, added) end
   Changed()
-  return task
+  return added
 end
 
 -- Adds crafts to any character's list on this realm; Altoholic's Recipes page uses it to queue
@@ -489,6 +501,37 @@ local function ReadAltoholic(wanted)
   return found, alts
 end
 
+-- How many of each item a character's lists will make, by item ID, over all its professions.
+local function Planned(professions)
+  local planned = {}
+  for _, tasks in pairs(professions) do
+    for _, task in ipairs(tasks) do
+      if task.item then
+        planned[task.item] = (planned[task.item] or 0) + task.count * math.max(task.made or 1, 1)
+      end
+    end
+  end
+  return planned
+end
+
+-- How many of each wanted item this character can get at: bags, bank, its mail and its alts,
+-- the same total as the materials table (and turned off with it).
+local function Holdings(wanted)
+  local have = {}
+  for id in pairs(wanted) do have[id] = C_Item.GetItemCount(id, true) end
+  local found = ReadAltoholic(wanted)
+  for id, chars in pairs(found) do
+    for _, entry in pairs(chars) do
+      have[id] = have[id] + entry.bags + entry.bank + entry.mail
+    end
+  end
+  return have
+end
+
+function M.Have(id)
+  return Holdings({ [id] = true })[id]
+end
+
 -- Works out, for a profession's tasks in order:
 --   plan.ready[task]  crafts possible from what's in the bags now. Each task uses up what
 --                     earlier tasks leave and can use what they make, so bars smelted by one
@@ -499,7 +542,9 @@ end
 function M.Plan(profession)
   local tasks = M.Tasks(profession)
   local plan = { tasks = tasks, ready = {}, materials = {} }
-  local stock, needed, planned, order = {}, {}, {}, {}
+  local stock, needed, order = {}, {}, {}
+  -- what any of this character's lists will make, so bars on the Mining list count for Blacksmithing
+  local planned = Planned(M.MyTasks())
 
   local function InBags(id)
     if not stock[id] then stock[id] = C_Item.GetItemCount(id) end
@@ -521,7 +566,6 @@ function M.Plan(profession)
     end
     if task.item then
       stock[task.item] = InBags(task.item) + ready * task.made
-      planned[task.item] = (planned[task.item] or 0) + task.count * task.made
     end
     plan.ready[task] = ready
   end
@@ -565,24 +609,34 @@ function M.Plan(profession)
   return plan
 end
 
+-- What a character's tasks need overall, by item ID. What any of its tasks makes comes off,
+-- as in M.Plan.
+local function NetNeeds(professions)
+  local needed = {}
+  for _, tasks in pairs(professions) do
+    for _, task in ipairs(tasks) do
+      for _, reagent in ipairs(task.reagents or {}) do
+        needed[reagent.id] = needed[reagent.id] or { name = reagent.name, need = 0 }
+        needed[reagent.id].need = needed[reagent.id].need + task.count * reagent.count
+      end
+    end
+  end
+  local planned, needs = Planned(professions), {}
+  for id, row in pairs(needed) do
+    local need = row.need - (planned[id] or 0)
+    if need > 0 then needs[id] = { name = row.name, need = need } end
+  end
+  return needs
+end
+
 -- What to take out of the bank for the tasks of every profession, as rows of id, name, take: only
 -- what the bags are short of and the bank has.
 function M.BankMaterials()
-  local needed, order = {}, {}
-  for profession in pairs(M.MyTasks()) do
-    for _, row in ipairs(M.Plan(profession).materials) do
-      if not needed[row.id] then
-        needed[row.id] = { id = row.id, name = row.name, need = 0, bags = row.bags, bank = row.bank }
-        table.insert(order, needed[row.id])
-      end
-      needed[row.id].need = needed[row.id].need + row.need
-    end
-  end
-
   local rows = {}
-  for _, row in ipairs(order) do
-    row.take = math.min(row.need - row.bags, row.bank)
-    if row.take > 0 then table.insert(rows, row) end
+  for id, row in pairs(NetNeeds(M.MyTasks())) do
+    local bags = C_Item.GetItemCount(id)
+    local take = math.min(row.need - bags, C_Item.GetItemCount(id, true) - bags)
+    if take > 0 then table.insert(rows, { id = id, name = row.name, need = row.need, take = take }) end
   end
   table.sort(rows, function(a, b) return a.name < b.name end)
   return rows
@@ -600,31 +654,6 @@ local function BankReminder()
   end
 end
 
--- What a character's tasks need overall, by item ID. What a task makes comes off what the
--- same profession's tasks need, as in M.Plan.
-local function NetNeeds(professions)
-  local needs = {}
-  for _, tasks in pairs(professions) do
-    local needed, planned = {}, {}
-    for _, task in ipairs(tasks) do
-      for _, reagent in ipairs(task.reagents) do
-        needed[reagent.id] = needed[reagent.id] or { name = reagent.name, need = 0 }
-        needed[reagent.id].need = needed[reagent.id].need + task.count * reagent.count
-      end
-      if task.item then
-        planned[task.item] = (planned[task.item] or 0) + task.count * task.made
-      end
-    end
-    for id, row in pairs(needed) do
-      local need = row.need - (planned[id] or 0)
-      if need > 0 then
-        needs[id] = needs[id] or { name = row.name, need = 0 }
-        needs[id].need = needs[id].need + need
-      end
-    end
-  end
-  return needs
-end
 
 -- What this character could send its alts for their task lists, as rows of alt, id, name, send.
 -- It keeps what its own tasks need, each item is only offered once, and what an alt already
@@ -852,6 +881,14 @@ driver:SetScript("OnEvent", function()
   elseif event == "MAIL_SHOW" then
     AltReminder()
 
+  elseif event == "MERCHANT_SHOW" then
+    M.pendingBuys = {}
+    if M.OptionSet("autobuy") then M.BuyVendorMaterials() else Changed() end
+
+  elseif event == "MERCHANT_CLOSED" then
+    M.pendingBuys = {}
+    Changed()
+
   elseif event == "TRADE_SKILL_CLOSE" or event == "CRAFT_CLOSE" then
     -- the batch carries on, but the button that would stop it is gone
     EndBatch()
@@ -884,6 +921,9 @@ driver:RegisterEvent("BANKFRAME_OPENED")
 driver:RegisterEvent("MAIL_SHOW")
 driver:RegisterEvent("TRADE_SKILL_CLOSE")
 driver:RegisterEvent("CRAFT_CLOSE")
+driver:RegisterEvent("MERCHANT_SHOW")
+driver:RegisterEvent("MERCHANT_UPDATE")
+driver:RegisterEvent("MERCHANT_CLOSED")
 
 -- [ Missing recipes ]
 
@@ -1080,6 +1120,275 @@ function M.ShowItemOnMap(itemID)
   pfMap.queue_update = GetTime()
   pfMap:ShowMapID(best)
   return true
+end
+
+-- [ Materials you can make ]
+-- Adding a recipe also queues what it needs and this character can make, when there isn't enough
+-- in its bags, bank, mail and alts: bars for a blade, bolts for a shirt. The recipe that makes an
+-- item is looked for in the open window first, every row included, then in the recipe list for
+-- the character's other professions (Smelt Copper on the Mining list for Blacksmithing), where
+-- IsPlayerSpell says which it knows. Those are queued like Altoholic's, stale until their window
+-- is opened, and assumed to make one each until then.
+
+local makersFrom, makersByItem
+
+-- every recipe in the list that makes an item, as { english profession, craft }
+local function ListedMakers(item)
+  if makersFrom ~= M.RecipeDB then
+    makersFrom, makersByItem = M.RecipeDB, {}
+    for english, crafts in pairs(M.RecipeDB or {}) do
+      for _, craft in ipairs(crafts) do
+        local made = craft[5]
+        if made then
+          makersByItem[made] = makersByItem[made] or {}
+          table.insert(makersByItem[made], { english = english, craft = craft })
+        end
+      end
+    end
+  end
+  return makersByItem[item] or {}
+end
+
+-- the name this character's lists use for a profession, in the client's language
+local function ListName(english)
+  for profession in pairs(M.MyTasks()) do
+    if M.EnglishProfession(profession) == english then return profession end
+  end
+  return M.RecipeName(english) or english
+end
+
+local function Uses(task, item)
+  for _, reagent in ipairs(task.reagents or {}) do
+    if reagent.id == item then return true end
+  end
+end
+
+-- Adds crafts of a recipe to a list, above the first task there that uses what it makes.
+local function QueueMaker(profession, maker, crafts)
+  local tasks = M.Tasks(profession)
+  local task
+  for _, existing in ipairs(tasks) do
+    if existing.name == maker.name then task = existing end
+  end
+  if task then
+    task.count = task.count + crafts
+  else
+    task = maker
+    task.count = crafts
+    table.insert(tasks, task)
+  end
+
+  local at = Position(tasks, task)
+  for i = 1, at - 1 do
+    if Uses(tasks[i], task.item) then
+      table.remove(tasks, at)
+      table.insert(tasks, i, task)
+      break
+    end
+  end
+end
+
+function M.AddIntermediates(ctx, profession, task)
+  local window = M.windows[ctx]
+  local english = M.EnglishProfession(profession)
+  local queued, order, visited, work, names = {}, {}, {}, {}, {}
+
+  local function Push(t)
+    for _, reagent in ipairs(t.reagents or {}) do
+      names[reagent.id] = names[reagent.id] or reagent.name
+      table.insert(work, reagent.id)
+    end
+  end
+
+  -- the recipe that makes an item and the list it goes on, or nil and whether several do
+  local rows
+  local function FindMaker(item)
+    local own = rows[item]
+    if own then
+      if table.getn(own) > 1 then return nil, nil, true end
+      return window.Read(own[1]), profession
+    end
+
+    local known = {}
+    if IsPlayerSpell then
+      for _, m in ipairs(ListedMakers(item)) do
+        local spell = m.craft[1]
+        -- a window that names what its rows make has already been searched
+        local searched = m.english == english and window.Item
+        if not searched and spell < PLACEHOLDER and IsPlayerSpell(spell) then
+          table.insert(known, m)
+        end
+      end
+    end
+    if table.getn(known) > 1 then return nil, nil, true end
+    local m = known[1]
+    if not m then return nil end
+
+    local craft = m.craft
+    local maker = {
+      name = M.RecipeName(craft[2]) or craft[2], spell = craft[1], item = craft[5], made = 1,
+      reagents = {}, stale = true,
+    }
+    for _, r in ipairs(M.ParseReagents(craft[6])) do
+      table.insert(maker.reagents, ReadReagent(r[1], nil, nil, r[2]))
+    end
+    return maker, ListName(m.english)
+  end
+
+  local function Work()
+    rows = {}
+    if window.Item then
+      for i = 1, window.Count() do
+        local item = window.Item(i)
+        local _, kind = window.Info(i)
+        if item and kind ~= "header" then
+          rows[item] = rows[item] or {}
+          table.insert(rows[item], i)
+        end
+      end
+    end
+
+    Push(task)
+    local steps = 0
+    while table.getn(work) > 0 and steps < 50 do
+      steps = steps + 1
+      local item = table.remove(work, 1)
+      if not visited[item] then
+        visited[item] = true
+        local need = NetNeeds(M.MyTasks())[item]
+        local short = need and need.need - M.Have(item) or 0
+        if short > 0 then
+          local maker, list, several = FindMaker(item)
+          if several then
+            Say("several of your recipes make " .. (names[item] or "item:" .. item) .. "; queue the one you want.")
+          elseif maker then
+            local crafts = math.ceil(short / math.max(maker.made or 1, 1))
+            QueueMaker(list, maker, crafts)
+            local key = list .. "|" .. maker.name
+            if not queued[key] then
+              queued[key] = { name = maker.name, profession = list, count = 0 }
+              table.insert(order, queued[key])
+            end
+            queued[key].count = queued[key].count + crafts
+            Push(maker)
+          end
+        end
+      end
+    end
+  end
+
+  if window.Item then window.WithFullList(Work) else Work() end
+
+  if table.getn(order) > 0 then
+    local parts = {}
+    for _, q in ipairs(order) do
+      local where = q.profession ~= profession and " (" .. q.profession .. ")" or ""
+      table.insert(parts, q.count .. " x " .. q.name .. where)
+    end
+    Say("also queued " .. table.concat(parts, ", ") .. " for " .. task.name .. ".")
+  end
+end
+
+-- [ Buying from vendors ]
+-- At a merchant, what the task lists still need beyond what this character can get at (bags,
+-- bank, mail and alts) and the merchant sells. Bought items take a moment to reach the bags, so
+-- what was bought is remembered until they have, and a second click can't buy it twice.
+
+M.pendingBuys = {}
+
+local function Pending(id)
+  local p = M.pendingBuys[id]
+  if not p then return 0 end
+  local arrived = C_Item.GetItemCount(id, true) - p.before
+  local left = p.count - arrived
+  if left <= 0 then
+    M.pendingBuys[id] = nil
+    return 0
+  end
+  return left
+end
+
+function M.Money(copper)
+  if GetCoinTextureString then return GetCoinTextureString(copper) end
+  local g = math.floor(copper / 10000)
+  local s = math.floor(copper / 100) - g * 100
+  local c = copper - math.floor(copper / 100) * 100
+  if g > 0 then return g .. "g " .. s .. "s " .. c .. "c" end
+  if s > 0 then return s .. "s " .. c .. "c" end
+  return c .. "c"
+end
+
+-- Rows of slot, id, name, stack (items per purchase), buys (purchases), count (items), cost.
+-- A row the money doesn't cover is marked poor and buys what it can.
+function M.VendorPurchases()
+  local rows = {}
+  if not (C_MerchantFrame and GetMerchantNumItems) then return rows end
+  local needs = NetNeeds(M.MyTasks())
+  local wanted = {}
+  for id in pairs(needs) do wanted[id] = true end
+  if not next(wanted) then return rows end
+
+  local have = Holdings(wanted)
+  local money = GetMoney()
+  for slot = 1, GetMerchantNumItems() do
+    local info = C_MerchantFrame.GetItemInfo(slot)
+    local need = info and needs[info.itemID]
+    if need and info.price and info.price > 0 then
+      local id = info.itemID
+      local short = need.need - have[id] - Pending(id)
+      if short > 0 then
+        local stack = math.max(info.stackCount or 1, 1)
+        local buys = math.ceil(short / stack)
+        if info.numAvailable and info.numAvailable >= 0 then buys = math.min(buys, info.numAvailable) end
+        local row = { slot = slot, id = id, name = need.name, stack = stack }
+        local afford = math.floor(money / info.price)
+        if afford < buys then
+          buys = afford
+          row.poor = true
+        end
+        row.buys, row.count, row.cost = buys, buys * stack, buys * info.price
+        money = money - row.cost
+        have[id] = have[id] + row.count -- a second slot with the same item buys only the rest
+        table.insert(rows, row)
+      end
+    end
+  end
+  return rows
+end
+
+function M.BuyVendorMaterials()
+  local total, any = 0, false
+  for _, row in ipairs(M.VendorPurchases()) do
+    if row.buys > 0 then
+      -- a call buys up to a stack's worth
+      local max = C_Item.GetItemMaxStackSizeByID and C_Item.GetItemMaxStackSizeByID(row.id)
+      local chunk = math.max(1, math.floor((max or 1) / row.stack))
+      local left = row.buys
+      while left > 0 do
+        local n = math.min(chunk, left)
+        BuyMerchantItem(row.slot, n)
+        left = left - n
+      end
+      local before = C_Item.GetItemCount(row.id, true)
+      local p = M.pendingBuys[row.id]
+      if p then
+        p.count = p.count + row.count
+      else
+        M.pendingBuys[row.id] = { count = row.count, before = before }
+      end
+
+      if not any then Say("bought for your task list:") end
+      any = true
+      total = total + row.cost
+      DEFAULT_CHAT_FRAME:AddMessage("  " .. row.count .. " x " .. row.name .. " (" .. M.Money(row.cost) .. ")")
+    end
+    if row.poor then
+      Say("not enough money for all the " .. row.name .. " your tasks need.")
+    end
+  end
+  if any then DEFAULT_CHAT_FRAME:AddMessage("  " .. T("Total") .. ": " .. M.Money(total)) end
+  Changed()
+  return any
 end
 
 -- [ Shared with Altoholic ]

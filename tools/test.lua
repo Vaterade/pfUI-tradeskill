@@ -159,9 +159,12 @@ local function Reset()
   casts, stopped = {}, 0
   carried, banked = {}, {}
   M.running, M.confirm = nil, nil
+  M.pendingBuys = {}
   said = nil
   list, subFilter, selected = fullList, 0, 2
   Altoholic = nil
+  -- queueing what a recipe needs has its own tests; the others add recipes one at a time
+  pfUI_config.trades = { intermediates = "0" }
 end
 
 local function Row(plan, id)
@@ -336,7 +339,7 @@ pfUI_config.trades = { altoholic = "0" }
 plan = M.Plan("Blacksmithing")
 Eq(plan.alts, "off", "Altoholic setting off")
 Eq(Row(plan, ORE).alts, 0, "no alts when off")
-pfUI_config.trades = nil
+pfUI_config.trades = { intermediates = "0" }
 
 -- [ Bank reminder ]
 
@@ -367,7 +370,7 @@ alerts = {}
 pfUI_config.trades = { bankreminder = "0" }
 Fire("BANKFRAME_OPENED")
 Eq(table.getn(alerts), 0, "can be turned off")
-pfUI_config.trades = nil
+pfUI_config.trades = { intermediates = "0" }
 
 carried = { [ORE] = 25, [COAL] = 1 }
 Fire("BANKFRAME_OPENED")
@@ -461,7 +464,152 @@ alerts = {}
 pfUI_config.trades = { altreminder = "0" }
 Fire("MAIL_SHOW")
 Eq(table.getn(alerts), 0, "can be turned off")
-pfUI_config.trades = nil
+pfUI_config.trades = { intermediates = "0" }
+
+-- [ Materials you can make ]
+
+local function Names(profession)
+  local names = {}
+  for _, task in ipairs(M.Tasks(profession)) do table.insert(names, task.name .. " " .. task.count) end
+  return table.concat(names, ", ")
+end
+
+-- from the open window: the bars a blade needs are smelted first
+Reset()
+pfUI_config.trades = {}
+selected = 3; M.AddSelected("TradeSkill", 2)  -- 8 bars, 2 coal
+Eq(Names("Blacksmithing"), "Smelt Copper 8, Copper Blade 2", "the bars are queued above the blade")
+Eq(said, "|cff33ffccpf|cffffffffUI|cffaaaaaa Tradeskill:|r also queued 8 x Smelt Copper for Copper Blade.", "and it says so")
+M.AddSelected("TradeSkill", 1)
+Eq(Names("Blacksmithing"), "Smelt Copper 12, Copper Blade 3", "adding more tops the bars up")
+
+-- what this character holds anywhere comes off
+Reset()
+pfUI_config.trades = {}
+banked = { [BAR] = 3 }
+selected = 3; M.AddSelected("TradeSkill", 2)
+Eq(Names("Blacksmithing"), "Smelt Copper 5, Copper Blade 2", "bars in the bank come off")
+Reset()
+pfUI_config.trades = {}
+carried = { [BAR] = 8 }
+selected = 3; M.AddSelected("TradeSkill", 2)
+Eq(Names("Blacksmithing"), "Copper Blade 2", "nothing to make when the bags have them")
+Reset()
+pfUI_config.trades = {}
+Altoholic = { db = { account = { data = { Horde = { Realm = { char = {
+  Alt = { bag = { Bag0 = { size = 1, ids = { BAR }, counts = { 6 } } } },
+} } } } } } }
+selected = 3; M.AddSelected("TradeSkill", 2)
+Eq(Names("Blacksmithing"), "Smelt Copper 2, Copper Blade 2", "an alt's bars come off")
+
+-- a smelting task already below the blade moves above it
+Reset()
+selected = 3; M.AddSelected("TradeSkill", 1)
+selected = 2; M.AddSelected("TradeSkill", 1)
+pfUI_config.trades = {}
+selected = 3; M.AddSelected("TradeSkill", 1)
+Eq(Names("Blacksmithing"), "Smelt Copper 8, Copper Blade 2", "the existing task grows and moves up")
+
+-- turned off
+Reset()
+selected = 3; M.AddSelected("TradeSkill", 2)
+Eq(Names("Blacksmithing"), "Copper Blade 2", "nothing extra with the setting off")
+
+-- from another profession: the window has no smelting, the recipe list and IsPlayerSpell do
+Reset()
+pfUI_config.trades = {}
+list = { fullList[1], fullList[3] }
+IsPlayerSpell = function(spell) return spell == 2657 end -- Smelt Copper
+selected = 2; M.AddSelected("TradeSkill", 2)
+local smelt = M.Tasks("Mining")[1]
+Eq(smelt and smelt.name, "Smelt Copper", "smelting goes on the Mining list")
+Eq(smelt and smelt.count, 8, "as many as the bars needed")
+Eq(smelt and smelt.stale, true, "filled in when Mining is opened")
+Eq(smelt and smelt.reagents[1].id, ORE, "its ore comes from the recipe list")
+Eq(Row(M.Plan("Blacksmithing"), BAR), nil, "the blade's bars count as planned")
+Eq(Names("Blacksmithing"), "Copper Blade 2", "the blade's list only has the blade")
+Eq(string.find(said, "8 x Smelt Copper (Mining)", 1, true) ~= nil, true, "the message names the profession")
+IsPlayerSpell = nil
+
+-- two recipes make the same thing: neither is guessed
+Reset()
+pfUI_config.trades = {}
+list = { fullList[1], fullList[2], { "Other Smelt", "easy", reagents = { { COAL, "Coal", 1 } }, item = BAR, made = 1 }, fullList[3] }
+selected = 4; M.AddSelected("TradeSkill", 1)
+Eq(Names("Blacksmithing"), "Copper Blade 1", "nothing queued when two recipes make the bars")
+Eq(string.find(said, "several of your recipes make Copper Bar", 1, true) ~= nil, true, "and it says so")
+
+-- recipes that make each other's materials stop
+Reset()
+pfUI_config.trades = {}
+local X, Y = 8001, 8002
+list = { fullList[1],
+  { "Make X", "easy", reagents = { { Y, "Y", 1 } }, item = X, made = 1 },
+  { "Make Y", "easy", reagents = { { X, "X", 1 } }, item = Y, made = 1 },
+  { "Use X", "easy", reagents = { { X, "X", 1 } }, made = 1 } }
+selected = 4; M.AddSelected("TradeSkill", 1)
+Eq(table.getn(M.Tasks("Blacksmithing")), 3, "a loop ends")
+
+-- [ Buying from vendors ]
+
+local shop, bought, money = {}, {}, 0
+C_MerchantFrame = { GetItemInfo = function(slot) return shop[slot] end }
+function GetMerchantNumItems() return table.getn(shop) end
+function GetMoney() return money end
+function BuyMerchantItem(slot, n) table.insert(bought, slot .. "x" .. n) end
+C_Item.GetItemMaxStackSizeByID = function() return 20 end
+local FLUX, VIAL = 3466, 3371
+
+local function VendorSetup()
+  Reset()
+  bought, money = {}, 100000
+  list = { fullList[1], { "Thing", "easy", reagents = { { FLUX, "Strong Flux", 1 }, { VIAL, "Vial", 1 } }, made = 1 } }
+  selected = 2; M.AddSelected("TradeSkill", 52)
+  shop = {
+    { itemID = 999, price = 5, stackCount = 1, numAvailable = -1 },
+    { itemID = FLUX, price = 10, stackCount = 1, numAvailable = -1 },
+    { itemID = VIAL, price = 4, stackCount = 5, numAvailable = -1 },
+  }
+end
+
+VendorSetup()
+carried = { [FLUX] = 50 }
+local rows = M.VendorPurchases()
+Eq(table.getn(rows), 2, "only what the tasks need")
+Eq(rows[1].count, 2, "what the bags are short of")
+Eq(rows[2].buys, 11, "52 vials sold by 5 is 11 purchases")
+Eq(rows[2].cost, 44, "at the purchase price")
+M.BuyVendorMaterials()
+Eq(table.concat(bought, " "), "2x2 3x4 3x4 3x3", "a stack's worth per call")
+bought = {}
+M.BuyVendorMaterials()
+Eq(table.getn(bought), 0, "nothing again before they arrive")
+carried = { [FLUX] = 52, [VIAL] = 55 }
+M.BuyVendorMaterials()
+Eq(table.getn(bought), 0, "nor once they have")
+
+VendorSetup()
+shop[3].numAvailable = 3
+Eq(M.VendorPurchases()[2].buys, 3, "no more than the merchant has")
+
+VendorSetup()
+money = 300
+rows = M.VendorPurchases()
+Eq(rows[1].buys, 30, "the flux takes what money there is")
+Eq(rows[1].poor, true, "and is marked short")
+Eq(rows[2].buys, 0, "nothing left for vials")
+
+VendorSetup()
+banked = { [FLUX] = 52 }
+Eq(table.getn(M.VendorPurchases()), 1, "the bank counts")
+
+VendorSetup()
+Fire("MERCHANT_SHOW")
+Eq(table.getn(bought), 0, "not bought on its own by default")
+pfUI_config.trades = { intermediates = "0", autobuy = "1" }
+Fire("MERCHANT_SHOW")
+Eq(table.getn(bought) > 0, true, "bought on opening with the setting on")
+shop = {}
 
 -- [ Crafting ]
 
@@ -840,6 +988,24 @@ Eq(pfUITradesButton3.point[2], CraftDetailScrollFrame, "Queue button anchor on t
 CraftFrame.scripts.OnShow()
 Eq(pfUITradesButton3.shown, false, "no Queue button on Beast Training")
 Eq(pfUITradesButton4.shown, false, "nor a Missing one")
+
+-- the merchant button shows while the merchant sells something the tasks are short of
+MerchantFrame = NewFrame("Frame")
+MerchantFrame:Show()
+VendorSetup()
+M.onChange()
+local buyButton
+for i = 1, 200 do
+  local b = _G["pfUITradesButton" .. i]
+  if b and b.parent == MerchantFrame then buyButton = b end
+end
+Eq(buyButton ~= nil and buyButton.shown, true, "a Buy button on the merchant window")
+this = buyButton
+buyButton.scripts.OnEnter()
+buyButton.scripts.OnClick()
+Eq(table.getn(bought) > 0, true, "it buys")
+Eq(buyButton.shown, false, "and hides once nothing is left to buy")
+MerchantFrame, shop = nil, {}
 
 print(passed .. " passed, " .. failures .. " failed")
 os.exit(failures == 0 and 0 or 1)
