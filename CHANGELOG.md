@@ -6,7 +6,7 @@ the version in `pfUI-tradeskill.toc` into the GitHub release notes, so write it 
 Versions follow [semantic versioning](https://semver.org/): a fix raises the last number, a
 new feature the middle one. While the first number is 0 the addon isn't considered stable yet.
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-11-08
 
 ### Added
 - Adding a recipe also queues the materials it needs that you can make and don't have enough
