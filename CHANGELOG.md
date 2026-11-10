@@ -6,6 +6,14 @@ the version in `pfUI-tradeskill.toc` into the GitHub release notes, so write it 
 Versions follow [semantic versioning](https://semver.org/): a fix raises the last number, a
 new feature the middle one. While the first number is 0 the addon isn't considered stable yet.
 
+## [0.4.0] - unreleased
+
+### Added
+- Hovering a recipe in the profession window shows how many you can make now and with
+  everything (bank, mail, alts and the materials you can make), how many are on your task list,
+  and for each reagent where yours are, whether you can make it and whether a vendor sells it.
+  It can be turned off in the settings.
+
 ## [0.3.0] - 2026-11-08
 
 ### Added
@@ -60,6 +68,7 @@ The first release.
 - A bank reminder listing materials to take out for your tasks.
 - An alt reminder at the bank and mailbox listing materials to send to your other characters.
 
+[0.4.0]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Vaterade/pfUI-tradeskill/releases/tag/v0.2.0

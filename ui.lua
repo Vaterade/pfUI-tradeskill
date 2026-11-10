@@ -30,6 +30,7 @@ pfUI:RegisterModule("trades", function()
   pfUI:UpdateConfig("trades", nil, "altreminder", "1")
   pfUI:UpdateConfig("trades", nil, "intermediates", "1")
   pfUI:UpdateConfig("trades", nil, "autobuy", "0")
+  pfUI:UpdateConfig("trades", nil, "tooltip", "1")
 
   local function Font(parent, justify)
     local text = parent:CreateFontString(nil, "OVERLAY")
@@ -808,11 +809,87 @@ pfUI:RegisterModule("trades", function()
     if learned and arg1 and string.find(arg1, learned) then RefreshMissing() end
   end)
 
+  -- [ Recipe tooltips ]
+  -- Hovering a recipe row shows what M.RecipeInfo works out. The rows are found by name, as
+  -- many as there are: pfUI's skin can make more than the stock 8. A row whose ID is 0 is
+  -- someone else's, like Atlas-CFM's category headers.
+
+  local ROW_PREFIX = { TradeSkill = "TradeSkillSkill", Craft = "Craft" }
+  local TYPE_COLOR = { optimal = { 1, .5, .25 }, medium = { 1, 1, 0 }, easy = { .25, .75, .25 }, trivial = { .5, .5, .5 } }
+
+  local function Places(r)
+    local parts = {}
+    for _, key in ipairs({ "bags", "bank", "mail", "alts" }) do
+      if r[key] > 0 then table.insert(parts, string.lower(T[string.upper(string.sub(key, 1, 1)) .. string.sub(key, 2)]) .. " " .. r[key]) end
+    end
+    if table.getn(parts) == 0 then return "|cffff4d4d" .. T["none"] .. "|r" end
+    return table.concat(parts, "  ")
+  end
+
+  local function RowEnter(name)
+    if not M.Option("tooltip") then return end
+    local index = this:GetID()
+    if not index or index == 0 then return end
+    local info = M.RecipeInfo(name, index)
+    if not info then return end
+
+    if GameTooltip:IsOwned(this) then
+      GameTooltip:AddLine(" ") -- another addon's lines first
+    else
+      GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+      local c = TYPE_COLOR[info.kind] or { 1, 1, 1 }
+      GameTooltip:SetText(info.name, c[1], c[2], c[3])
+    end
+
+    if info.most then
+      local text = info.most > info.now
+        and string.format(T["Can make: %d now, %d with everything"], info.now, info.most)
+        or string.format(T["Can make: %d"], info.now)
+      GameTooltip:AddLine(text, 1, 1, 1)
+    end
+    if info.queued then
+      GameTooltip:AddLine(string.format(T["On your task list: %d"], info.queued), .2, 1, .8)
+    end
+    for _, r in ipairs(info.reagents) do
+      local tags = {}
+      if r.makeable then table.insert(tags, T["can make"]) end
+      if r.vendor then table.insert(tags, T["vendor"]) end
+      local left = r.count .. " x " .. r.name
+      if table.getn(tags) > 0 then left = left .. " |cff999999" .. table.concat(tags, ", ") .. "|r" end
+      local c = STATUS[r.status]
+      GameTooltip:AddDoubleLine(left, Places(r), c[1], c[2], c[3], .8, .8, .8)
+    end
+    GameTooltip:Show()
+    this.pfTradesTooltip = true
+  end
+
+  local function RowLeave()
+    if this.pfTradesTooltip then
+      this.pfTradesTooltip = nil
+      GameTooltip:Hide()
+    end
+  end
+
+  local function HookRows(name)
+    local prefix = ROW_PREFIX[name]
+    local i = 1
+    while _G[prefix .. i] do
+      local row = _G[prefix .. i]
+      if not row.pfTradesHooked then
+        row.pfTradesHooked = true
+        HookScript(row, "OnEnter", function() RowEnter(name) end)
+        HookScript(row, "OnLeave", RowLeave)
+      end
+      i = i + 1
+    end
+  end
+
   -- [ Window hooks ]
 
   -- Called when a window opens, and again when the profession in it changes.
   local function WindowShown(name)
     ctx = name
+    HookRows(name)
     local toggle = toggles[name]
     if not M.windows[name].Profession() then
       toggle:Hide()
@@ -896,6 +973,7 @@ pfUI:RegisterModule("trades", function()
       pfUI.gui.CreateConfig(M.onChange, T["Remind me at the bank and mailbox about materials for alts"], C.trades, "altreminder", "checkbox")
       pfUI.gui.CreateConfig(M.onChange, T["Queue the materials you can make when adding a recipe"], C.trades, "intermediates", "checkbox")
       pfUI.gui.CreateConfig(M.onChange, T["Buy task materials from vendors automatically"], C.trades, "autobuy", "checkbox")
+      pfUI.gui.CreateConfig(M.onChange, T["Show what you can make when hovering a recipe"], C.trades, "tooltip", "checkbox")
     end)
   end
 

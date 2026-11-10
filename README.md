@@ -47,6 +47,21 @@ buys only what's short after your bags, bank, mail and alts, across all your pro
 more than your money covers. Chat lists what was bought. A setting buys it as soon as you open the
 merchant instead; it's off unless you turn it on.
 
+## Recipe tooltips
+
+Hover a recipe in the profession window to see, before queueing it:
+
+- **Can make**: how many your bags allow now, as the window counts, and how many with everything:
+  your bank, mail and alts, plus the materials you can make from them. Materials share one pool,
+  so ore isn't counted for two kinds of bar at once.
+- **On your task list**: how many are queued, if any.
+- **Each reagent**: how many one craft takes and where yours are (bags, bank, mail, alts),
+  coloured like the materials table. *can make* marks one you know a recipe for, *vendor* one
+  that pfQuest says a vendor sells.
+
+It never changes the window's filters, so it only finds the recipes listed in the window and those
+in the recipe list for your professions. It can be turned off in the same settings.
+
 ## Missing recipes
 
 Press **Missing**, next to **Queue**, for the recipes of the open profession you haven't learned.

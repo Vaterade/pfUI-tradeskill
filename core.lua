@@ -14,6 +14,7 @@ end
 M.Say = Say
 
 local function Changed()
+  M.recipeInfo = {} -- what the tooltips worked out may be out of date
   if M.onChange then M.onChange() end
 end
 
@@ -516,16 +517,27 @@ end
 
 -- How many of each wanted item this character can get at: bags, bank, its mail and its alts,
 -- the same total as the materials table (and turned off with it).
+-- Also returns them by place: parts[id] = { bags, bank, mail, alts }.
 local function Holdings(wanted)
-  local have = {}
-  for id in pairs(wanted) do have[id] = C_Item.GetItemCount(id, true) end
-  local found = ReadAltoholic(wanted)
-  for id, chars in pairs(found) do
-    for _, entry in pairs(chars) do
-      have[id] = have[id] + entry.bags + entry.bank + entry.mail
+  local have, parts = {}, {}
+  for id in pairs(wanted) do
+    local bags, all = C_Item.GetItemCount(id), C_Item.GetItemCount(id, true)
+    have[id] = all
+    parts[id] = { bags = bags, bank = all - bags, mail = 0, alts = 0 }
+  end
+  local me = UnitName("player")
+  for id, chars in pairs(ReadAltoholic(wanted)) do
+    for name, entry in pairs(chars) do
+      local held = entry.bags + entry.bank + entry.mail
+      have[id] = have[id] + held
+      if name == me then
+        parts[id].mail = parts[id].mail + held
+      else
+        parts[id].alts = parts[id].alts + held
+      end
     end
   end
-  return have
+  return have, parts
 end
 
 function M.Have(id)
@@ -875,10 +887,12 @@ driver:SetScript("OnEvent", function()
     M.MyTasks() -- moves an old per-character list across, so alts can see it
 
   elseif event == "BANKFRAME_OPENED" then
+    M.recipeInfo = {}
     BankReminder()
     AltReminder()
 
   elseif event == "MAIL_SHOW" then
+    M.recipeInfo = {}
     AltReminder()
 
   elseif event == "MERCHANT_SHOW" then
@@ -913,6 +927,7 @@ refresher:RegisterEvent("TRADE_SKILL_UPDATE")
 refresher:RegisterEvent("CRAFT_SHOW")
 refresher:RegisterEvent("CRAFT_UPDATE")
 refresher:SetScript("OnEvent", function()
+  M.recipeInfo = {} -- rows may have moved
   local ok, failure = pcall(M.RefreshTasks, string.find(event, "^CRAFT") and "Craft" or "TradeSkill")
   if not ok then Say("couldn't fill in a queued task: " .. tostring(failure)) end
 end)
@@ -924,6 +939,7 @@ driver:RegisterEvent("CRAFT_CLOSE")
 driver:RegisterEvent("MERCHANT_SHOW")
 driver:RegisterEvent("MERCHANT_UPDATE")
 driver:RegisterEvent("MERCHANT_CLOSED")
+driver:RegisterEvent("PLAYERBANKSLOTS_CHANGED") -- the bank's own slots; its bags give BAG_UPDATE_DELAYED
 
 -- [ Missing recipes ]
 
@@ -1188,9 +1204,59 @@ local function QueueMaker(profession, maker, crafts)
   end
 end
 
+-- The window's rows by the item each makes, as row indexes, of the rows it lists now.
+local function RowsByItem(window)
+  local rows = {}
+  if not window.Item then return rows end
+  for i = 1, window.Count() do
+    local item = window.Item(i)
+    local _, kind = window.Info(i)
+    if item and kind ~= "header" then
+      rows[item] = rows[item] or {}
+      table.insert(rows[item], i)
+    end
+  end
+  return rows
+end
+
+-- The recipe that makes an item, as a task, and the list it goes on; or nil, and true when
+-- several of the character's recipes make it. rows are the window's (RowsByItem). With
+-- allRows they are every row it has, so the recipe list isn't asked about its profession.
+local function FindMaker(window, profession, rows, item, allRows)
+  local own = rows[item]
+  if own then
+    if table.getn(own) > 1 then return nil, nil, true end
+    return window.Read(own[1]), profession
+  end
+
+  local english = M.EnglishProfession(profession)
+  local known = {}
+  if IsPlayerSpell then
+    for _, m in ipairs(ListedMakers(item)) do
+      local spell = m.craft[1]
+      local searched = allRows and m.english == english and window.Item
+      if not searched and spell < PLACEHOLDER and IsPlayerSpell(spell) then
+        table.insert(known, m)
+      end
+    end
+  end
+  if table.getn(known) > 1 then return nil, nil, true end
+  local m = known[1]
+  if not m then return nil end
+
+  local craft = m.craft
+  local maker = {
+    name = M.RecipeName(craft[2]) or craft[2], spell = craft[1], item = craft[5], made = 1,
+    reagents = {}, stale = true,
+  }
+  for _, r in ipairs(M.ParseReagents(craft[6])) do
+    table.insert(maker.reagents, ReadReagent(r[1], nil, nil, r[2]))
+  end
+  return maker, ListName(m.english)
+end
+
 function M.AddIntermediates(ctx, profession, task)
   local window = M.windows[ctx]
-  local english = M.EnglishProfession(profession)
   local queued, order, visited, work, names = {}, {}, {}, {}, {}
 
   local function Push(t)
@@ -1200,53 +1266,9 @@ function M.AddIntermediates(ctx, profession, task)
     end
   end
 
-  -- the recipe that makes an item and the list it goes on, or nil and whether several do
   local rows
-  local function FindMaker(item)
-    local own = rows[item]
-    if own then
-      if table.getn(own) > 1 then return nil, nil, true end
-      return window.Read(own[1]), profession
-    end
-
-    local known = {}
-    if IsPlayerSpell then
-      for _, m in ipairs(ListedMakers(item)) do
-        local spell = m.craft[1]
-        -- a window that names what its rows make has already been searched
-        local searched = m.english == english and window.Item
-        if not searched and spell < PLACEHOLDER and IsPlayerSpell(spell) then
-          table.insert(known, m)
-        end
-      end
-    end
-    if table.getn(known) > 1 then return nil, nil, true end
-    local m = known[1]
-    if not m then return nil end
-
-    local craft = m.craft
-    local maker = {
-      name = M.RecipeName(craft[2]) or craft[2], spell = craft[1], item = craft[5], made = 1,
-      reagents = {}, stale = true,
-    }
-    for _, r in ipairs(M.ParseReagents(craft[6])) do
-      table.insert(maker.reagents, ReadReagent(r[1], nil, nil, r[2]))
-    end
-    return maker, ListName(m.english)
-  end
-
   local function Work()
-    rows = {}
-    if window.Item then
-      for i = 1, window.Count() do
-        local item = window.Item(i)
-        local _, kind = window.Info(i)
-        if item and kind ~= "header" then
-          rows[item] = rows[item] or {}
-          table.insert(rows[item], i)
-        end
-      end
-    end
+    rows = RowsByItem(window)
 
     Push(task)
     local steps = 0
@@ -1258,7 +1280,7 @@ function M.AddIntermediates(ctx, profession, task)
         local need = NetNeeds(M.MyTasks())[item]
         local short = need and need.need - M.Have(item) or 0
         if short > 0 then
-          local maker, list, several = FindMaker(item)
+          local maker, list, several = FindMaker(window, profession, rows, item, true)
           if several then
             Say("several of your recipes make " .. (names[item] or "item:" .. item) .. "; queue the one you want.")
           elseif maker then
@@ -1287,6 +1309,122 @@ function M.AddIntermediates(ctx, profession, task)
     end
     Say("also queued " .. table.concat(parts, ", ") .. " for " .. task.name .. ".")
   end
+end
+
+-- [ Recipe tooltips ]
+-- What hovering a recipe in the window shows: how many can be made now (the window's own count,
+-- from the bags) and with everything (bags, bank, mail and alts, and what the character can
+-- make from them), and for each reagent where it is, whether it can be made and whether a vendor
+-- sells it. A hover never changes the window's filters: that would redraw the list under the
+-- cursor. So only the rows listed now are searched, then the recipe list for every profession.
+
+M.recipeInfo = {}
+local MAX_DEPTH = 5
+local MOST = 1000
+
+-- { name, kind, now, most, queued, reagents = { { id, name, count, bags, bank, mail, alts,
+-- status, makeable, vendor } } }, or nil for a header or someone else's window
+function M.RecipeInfo(ctx, index)
+  local window = M.windows[ctx]
+  if not window or window.Linked() or not index or index < 1 then return nil end
+  local key = ctx .. ":" .. index
+  local cached = M.recipeInfo[key]
+  if cached ~= nil then return cached or nil end
+
+  local profession = window.Profession()
+  local name, kind, available = window.Info(index)
+  local task = profession and name and kind ~= "header" and window.Read(index)
+  if not task then
+    M.recipeInfo[key] = false
+    return nil
+  end
+
+  local rows, makers = RowsByItem(window), {}
+  local function Maker(item)
+    if makers[item] == nil then
+      makers[item] = FindMaker(window, profession, rows, item, false) or false
+    end
+    return makers[item] or nil
+  end
+
+  -- everything that may be needed, to read the holdings once
+  local wanted = {}
+  local function Gather(t, depth)
+    for _, r in ipairs(t.reagents) do
+      if not wanted[r.id] then
+        wanted[r.id] = true
+        local maker = depth < MAX_DEPTH and Maker(r.id)
+        if maker then Gather(maker, depth + 1) end
+      end
+    end
+  end
+  Gather(task, 0)
+  local held, parts = Holdings(wanted)
+
+  -- Whether k crafts can be made: reagents come out of one pool, so two intermediates can't
+  -- both use the same ore, and what an intermediate makes beyond what's needed stays in it.
+  local function Possible(k)
+    local pool = {}
+    for id, n in pairs(held) do pool[id] = n end
+    local function Take(id, n, depth)
+      local got = math.min(pool[id] or 0, n)
+      pool[id] = (pool[id] or 0) - got
+      local short = n - got
+      if short <= 0 then return true end
+      local maker = depth < MAX_DEPTH and Maker(id)
+      if not maker then return false end
+      local made = math.max(maker.made or 1, 1)
+      local crafts = math.ceil(short / made)
+      for _, r in ipairs(maker.reagents) do
+        if not Take(r.id, r.count * crafts, depth + 1) then return false end
+      end
+      pool[id] = (pool[id] or 0) + crafts * made - short
+      return true
+    end
+    for _, r in ipairs(task.reagents) do
+      if not Take(r.id, r.count * k, 0) then return false end
+    end
+    return true
+  end
+
+  local info = { name = name, kind = kind, now = available or 0, reagents = {} }
+  if table.getn(task.reagents) > 0 then
+    local lo, hi = 0, MOST
+    while lo < hi do
+      local mid = math.floor((lo + hi + 1) / 2)
+      if Possible(mid) then lo = mid else hi = mid - 1 end
+    end
+    info.most = lo
+  end
+
+  for _, t in ipairs(M.Tasks(profession)) do
+    if t.name == name then info.queued = t.count end
+  end
+
+  local sources = M.HasItemSources()
+  for _, r in ipairs(task.reagents) do
+    local p = parts[r.id]
+    local row = { id = r.id, name = r.name, count = r.count,
+      bags = p.bags, bank = p.bank, mail = p.mail, alts = p.alts,
+      makeable = Maker(r.id) ~= nil }
+    if p.bags >= r.count then
+      row.status = "bags"
+    elseif p.bags + p.bank >= r.count then
+      row.status = "bank"
+    elseif held[r.id] >= r.count then
+      row.status = "elsewhere"
+    else
+      row.status = "short"
+    end
+    if sources then
+      local src = M.ItemSources(r.id)
+      row.vendor = src and src.vendors and table.getn(src.vendors) > 0 or false
+    end
+    table.insert(info.reagents, row)
+  end
+
+  M.recipeInfo[key] = info
+  return info
 end
 
 -- [ Buying from vendors ]

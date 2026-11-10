@@ -91,7 +91,7 @@ function GetTradeSkillLine() return "Blacksmithing" end
 function IsTradeSkillLinked() return false end
 function GetNumTradeSkills() return table.getn(list) end
 function GetTradeSkillSelectionIndex() return selected end
-function GetTradeSkillInfo(i) local r = list[i]; if r then return r[1], r[2], 0, true end end
+function GetTradeSkillInfo(i) local r = list[i]; if r then return r[1], r[2], r.avail or 0, true end end
 function GetTradeSkillIcon() return "icon" end
 function GetTradeSkillItemID(i) return list[i].item end
 function GetTradeSkillRecipeLink(i) return "|cffffd000|Henchant:" .. (1000 + i) .. "|h[x]|h|r" end
@@ -160,6 +160,7 @@ local function Reset()
   carried, banked = {}, {}
   M.running, M.confirm = nil, nil
   M.pendingBuys = {}
+  M.recipeInfo = {}
   said = nil
   list, subFilter, selected = fullList, 0, 2
   Altoholic = nil
@@ -611,6 +612,104 @@ Fire("MERCHANT_SHOW")
 Eq(table.getn(bought) > 0, true, "bought on opening with the setting on")
 shop = {}
 
+-- [ Recipe tooltips ]
+
+local function Reagent(info, id)
+  for _, r in ipairs(info.reagents) do
+    if r.id == id then return r end
+  end
+end
+
+Reset()
+Eq(M.RecipeInfo("TradeSkill", 1), nil, "a header has no tooltip")
+carried = { [ORE] = 8 }
+local info = M.RecipeInfo("TradeSkill", 3)
+Eq(info.name, "Copper Blade", "the hovered recipe")
+Eq(info.most, 0, "no coal, no blade")
+Eq(Reagent(info, BAR).makeable, true, "bars can be smelted")
+Eq(Reagent(info, COAL).makeable, false, "coal can't")
+Eq(Reagent(info, BAR).status, "short", "no bars anywhere")
+
+Reset()
+fullList[3].avail = 2
+carried = { [ORE] = 8 }
+banked = { [COAL] = 1 }
+info = M.RecipeInfo("TradeSkill", 3)
+Eq(info.now, 2, "now is the window's own count")
+Eq(info.most, 1, "8 ore smelt the 4 bars, the bank has the coal")
+Eq(Reagent(info, COAL).bank, 1, "coal in the bank")
+Eq(Reagent(info, COAL).status, "bank", "and coloured as such")
+fullList[3].avail = nil
+
+Reset()
+carried = { [ORE] = 16, [COAL] = 1 }
+Eq(M.RecipeInfo("TradeSkill", 3).most, 1, "limited by the coal")
+Reset()
+carried = { [ORE] = 16, [COAL] = 2, [BAR] = 1 }
+Eq(M.RecipeInfo("TradeSkill", 3).most, 2, "bars held and smelted together")
+Reset()
+Altoholic = { db = { account = { data = { Horde = { Realm = { char = {
+  Alt = { bag = { Bag0 = { size = 1, ids = { COAL }, counts = { 3 } } } },
+} } } } } } }
+carried = { [BAR] = 8 }
+info = M.RecipeInfo("TradeSkill", 3)
+Eq(Reagent(info, COAL).alts, 3, "an alt's coal")
+Eq(info.most, 2, "counts toward with everything")
+Eq(Reagent(info, COAL).status, "elsewhere", "and is coloured as elsewhere")
+
+-- two intermediates from the same ore don't both count it
+Reset()
+local P, Q = 8101, 8102
+local both = { fullList[1],
+  { "Make P", "easy", reagents = { { ORE, "Copper Ore", 2 } }, item = P, made = 1 },
+  { "Make Q", "easy", reagents = { { ORE, "Copper Ore", 2 } }, item = Q, made = 1 },
+  { "Use both", "easy", reagents = { { P, "P", 1 }, { Q, "Q", 1 } }, made = 1 } }
+list = both
+carried = { [ORE] = 2 }
+Eq(M.RecipeInfo("TradeSkill", 4).most, 0, "2 ore make one of them, not both")
+Reset()
+list = both
+carried = { [ORE] = 4 }
+Eq(M.RecipeInfo("TradeSkill", 4).most, 1, "4 ore make both")
+
+-- recipes that make each other's materials
+Reset()
+list = { fullList[1],
+  { "Make X", "easy", reagents = { { Y, "Y", 1 } }, item = X, made = 1 },
+  { "Make Y", "easy", reagents = { { X, "X", 1 } }, item = Y, made = 1 },
+  { "Use X", "easy", reagents = { { X, "X", 1 } }, made = 1 } }
+Eq(M.RecipeInfo("TradeSkill", 4).most, 0, "a loop makes nothing")
+
+-- queued, and a vendor from pfQuest
+Reset()
+selected = 3; M.AddSelected("TradeSkill", 2)
+pfDB = {
+  items = { data = { [COAL] = { V = { [10] = 1 } } } },
+  units = { data = { [10] = { coords = { { 50, 50, 1519, 0 } } } }, loc = { [10] = "Vendor Vic" } },
+  objects = { data = {}, loc = {} }, refloot = { data = {} },
+  zones = { loc = { [1519] = "Stormwind City" } },
+}
+info = M.RecipeInfo("TradeSkill", 3)
+Eq(info.queued, 2, "how many are on the task list")
+Eq(Reagent(info, COAL).vendor, true, "a vendor sells coal")
+Eq(Reagent(info, BAR).vendor, false, "none sells bars")
+pfDB = nil
+
+-- remembered until something changes
+Reset()
+local first = M.RecipeInfo("TradeSkill", 3)
+Eq(M.RecipeInfo("TradeSkill", 3), first, "a second hover reuses the first")
+Fire("BAG_UPDATE_DELAYED")
+Eq(M.RecipeInfo("TradeSkill", 3) ~= first, true, "a bag change works it out again")
+
+-- a hover leaves the window's filters alone
+Reset()
+SetTradeSkillSubClassFilter(1)
+local shown = list
+M.RecipeInfo("TradeSkill", 2)
+Eq(subFilter, 1, "the filter stays")
+Eq(list, shown, "and so do the rows")
+
 -- [ Crafting ]
 
 local function Tick(seconds)
@@ -1006,6 +1105,31 @@ buyButton.scripts.OnClick()
 Eq(table.getn(bought) > 0, true, "it buys")
 Eq(buyButton.shown, false, "and hides once nothing is left to buy")
 MerchantFrame, shop = nil, {}
+
+-- recipe rows show a tooltip on hover; pfUI's skin can make more rows than the stock 8
+local rowA, rowB = NewFrame("Button", "TradeSkillSkill1"), NewFrame("Button", "TradeSkillSkill2")
+rowA.GetID = function() return 3 end
+rowB.GetID = function() return 0 end -- Atlas-CFM's own category header
+-- real frames have nil for fields nobody set; the stub answers everything
+for _, row in ipairs({ rowA, rowB }) do row.pfTradesHooked, row.pfTradesTooltip = false, false end
+Reset()
+GameTooltip.label = nil
+TradeSkillFrame.scripts.OnShow()
+TradeSkillFrame.scripts.OnShow()
+Eq(rowA.pfTradesHooked and rowB.pfTradesHooked, true, "both rows hooked")
+this = rowA
+rowA.scripts.OnEnter()
+Eq(rawget(GameTooltip, "label"), "Copper Blade", "hovering a recipe shows its tooltip")
+rowA.scripts.OnLeave()
+GameTooltip.label = nil
+this = rowB
+rowB.scripts.OnEnter()
+Eq(rawget(GameTooltip, "label"), nil, "nothing on someone else's header")
+pfUI_config.trades.tooltip = "0"
+this = rowA
+rowA.scripts.OnEnter()
+Eq(rawget(GameTooltip, "label"), nil, "nothing with the setting off")
+pfUI_config.trades.tooltip = "1"
 
 print(passed .. " passed, " .. failures .. " failed")
 os.exit(failures == 0 and 0 or 1)
