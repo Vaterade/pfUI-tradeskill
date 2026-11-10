@@ -2,7 +2,7 @@
 ## Title: |cff33ffccpf|cffffffffUI|cffaaaaaa [Tradeskill]
 ## Author: Vaterade
 ## Notes: An external module for |cff33ffccpf|r|cffffffffUI|r that adds a task list and a materials overview to the profession windows.
-## Version: 0.3.0
+## Version: 0.4.0
 ## Dependencies: pfUI
 ## OptionalDeps: Altoholic
 ## SavedVariables: pfUITrades_Tasks

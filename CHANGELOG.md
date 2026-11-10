@@ -6,7 +6,7 @@ the version in `pfUI-tradeskill.toc` into the GitHub release notes, so write it 
 Versions follow [semantic versioning](https://semver.org/): a fix raises the last number, a
 new feature the middle one. While the first number is 0 the addon isn't considered stable yet.
 
-## [0.4.0] - unreleased
+## [0.4.0] - 2026-11-10
 
 ### Added
 - Hovering a recipe in the profession window shows how many you can make now and with
